@@ -26,8 +26,8 @@ LIMITE_TRANSFERENCIA = 300000
 # --- CONFIGURACIÓN DE RUTAS Y PARÁMETROS ---
 LOGGER_GLOBAL = PrefectLogger(__file__)
 LIMITE_TRANSFERENCIA = 300000
-#DESTINATARIOS = ["gmacho@favicur.com.ar", "daguero@favicur.com.ar"]
-DESTINATARIOS = ["gmacho@favicur.com.ar", "daguero@favicur.com.ar", "tomas.gallo@consulters.com.ar", "priscila.scharf@consulters.com.ar"]
+DESTINATARIOS = ["tomas.gallo@consulters.com.ar", "priscila.scharf@consulters.com.ar"]
+#DESTINATARIOS = ["gmacho@favicur.com.ar", "daguero@favicur.com.ar", "tomas.gallo@consulters.com.ar", "priscila.scharf@consulters.com.ar"]
 
 # CONFIG MAIL (Desde Prefect Secrets)
 MAIL_SERVER = "smtp.gmail.com"
