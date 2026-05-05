@@ -19,7 +19,7 @@ print(ENV)
 # CONFIG DEPLOY
 # -----------------------------
 
-DEPLOY_NAME = "Primer aviso de actualizacion de archivo"
+DEPLOY_NAME = "Ultimo aviso de actualizacion de archivo"
 
 ENTRYPOINT = "aviso_mismo_dia/flow.py:main_flow"
 
