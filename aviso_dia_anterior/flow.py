@@ -12,7 +12,7 @@ LOGGER_GLOBAL = PrefectLogger(__file__)
 
 MAIL_SERVER = "smtp.gmail.com"
 MAIL_PORT = 587
-MAIL_USER = "tomigallok@gmail.com"
+MAIL_USER = "tomas.gallo@consulters.com.ar"
 MAIL_PASSWORD = read_secret("claveemail")
 
 DESTINATARIOS = ["tomas.gallo@consulters.com.ar", "priscila.scharf@consulters.com.ar"]

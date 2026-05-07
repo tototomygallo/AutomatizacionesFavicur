@@ -5,7 +5,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 import smtplib
 from prefect import flow, task
 from consulterscommons.log_tools.prefect_log_config import PrefectLogger
@@ -32,8 +32,7 @@ DESTINATARIOS = ["tomas.gallo@consulters.com.ar", "priscila.scharf@consulters.co
 # CONFIG MAIL (Desde Prefect Secrets)
 MAIL_SERVER = "smtp.gmail.com"
 MAIL_PORT = 587
-MAIL_USER = "tomigallok@gmail.com"
-MAIL_SERVER_PASSWORD = "dnkp znst iebs wvwo"
+MAIL_USER = "tomas.gallo@consulters.com.ar"
 MAIL_SERVER_PASSWORD=read_secret("claveemail")
 
 def limpiar_monto_contable(serie):
@@ -75,20 +74,22 @@ print("🚀 Iniciando Proceso Integral de Pagos y Disponibilidad...")
 
 
 @task(retries=2)
-def verificar_fuentes_actualizadas(archivos: List[str]) -> Tuple[bool, List[str]]:
-    """Verifica si los archivos del Drive se modificaron hoy."""
+def verificar_estado_fuentes(archivos: List[str]) -> Dict[str, str]:
+    """Chequea cada archivo y devuelve su estado (Actualizado/Desactualizado)."""
     hoy = datetime.now().date()
-    faltantes = []
+    estados = {}
     for arc in archivos:
         path = os.path.join(RUTA_DRIVE, arc)
         if not os.path.exists(path):
-            faltantes.append(f"{arc} (No existe)")
+            estados[arc] = "❌ No existe en la ruta"
             continue
+        
         mtime = datetime.fromtimestamp(os.path.getmtime(path)).date()
-        if mtime < hoy:
-            faltantes.append(arc)
-    return len(faltantes) == 0, faltantes
-
+        if mtime == hoy:
+            estados[arc] = "✅ Actualizado"
+        else:
+            estados[arc] = f"⚠️ Desactualizado (Últ. cambio: {mtime.strftime('%d/%m')})"
+    return estados
 
 
 @task
@@ -295,37 +296,36 @@ def generar_reporte_excel():
 print(f"\n✅ Reporte completo. Los negativos ahora resaltan en rojo y el tablero es amarillo pastel.")
 
 @task
-
-def enviar_mail(path_adjunto: str = None, faltantes: List[str] = None):
+def enviar_mail(path_adjunto: str, estados: Dict[str, str]):
     logger = LOGGER_GLOBAL.obtener_logger_prefect()
     msg = MIMEMultipart()
     msg["From"] = MAIL_USER
     msg["To"] = ", ".join(DESTINATARIOS)
-    
-    fecha_str = datetime.now().strftime("%d de abril") # Ojo: esto es manual según tu pedido
+    msg["Subject"] = "Reporte Pago a Proveedores - FAVICUR"
 
-    if path_adjunto:
-        msg["Subject"] = "Reporte Pago a Proveedores"
-        body = f"Reporte Pago a Proveedores semana del {fecha_str}."
-        msg.attach(MIMEText(body, 'plain'))
-        with open(path_adjunto, "rb") as f:
-            part = MIMEBase("application", "octet-stream")
-            part.set_payload(f.read())
-            encoders.encode_base64(part)
-            part.add_header("Content-Disposition", f"attachment; filename={path_adjunto}")
-            msg.attach(part)
-    else:
-        msg["Subject"] = "Reporte Pago a Proveedores - ATENCION"
-        cuerpo_error = "No se envía la planilla por falta de fuentes actualizadas.\n\nFaltan actualizar:\n"
-        cuerpo_error += "\n".join([f"- {arc}" for arc in faltantes])
-        msg.attach(MIMEText(cuerpo_error, 'plain'))
+    # Construir el cuerpo del mail con el aviso de archivos
+    hay_desactualizados = any("✅" not in v for v in estados.values())
+    alerta = "⚠️ ATENCIÓN: El reporte contiene datos de archivos desactualizados.\n\n" if hay_desactualizados else ""
+    
+    cuerpo = f"Hola,\n\nAdjuntamos el Reporte de Pago a Proveedores.\n\n{alerta}Estado de las fuentes utilizadas:\n"
+    for archivo, estado in estados.items():
+        cuerpo += f"- {archivo}: {estado}\n"
+    
+    msg.attach(MIMEText(cuerpo, 'plain'))
+
+    with open(path_adjunto, "rb") as f:
+        part = MIMEBase("application", "octet-stream")
+        part.set_payload(f.read())
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", f"attachment; filename={path_adjunto}")
+        msg.attach(part)
 
     server = smtplib.SMTP(MAIL_SERVER, MAIL_PORT)
     server.starttls()
     server.login(MAIL_USER, MAIL_SERVER_PASSWORD)
     server.sendmail(MAIL_USER, DESTINATARIOS, msg.as_string())
     server.quit()
-    logger.info("📧 Mail enviado correctamente.")
+    logger.info("📧 Mail enviado con éxito.")
 
 # --- FLOW ---
 
@@ -346,17 +346,12 @@ def main_flow():
     # 1. Validar actualización de archivos
  
     
-    ok, faltantes = verificar_fuentes_actualizadas(fuentes)
-    
-    if not ok:
-        logger.warning(f"Fuentes desactualizadas: {faltantes}")
-        enviar_mail(faltantes=faltantes)
-        return
+    estados = verificar_estado_fuentes(fuentes)
   
     # 2. Si todo está ok, procesar y enviar
     try:
         ruta_excel = generar_reporte_excel()
-        enviar_mail(path_adjunto=ruta_excel)
+        enviar_mail(ruta_excel, estados)
         logger.info("Proceso terminado exitosamente.")
     except Exception as e:
         logger.error(f"Fallo en el procesamiento: {e}")

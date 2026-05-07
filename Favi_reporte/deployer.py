@@ -69,7 +69,7 @@ if __name__ == "__main__":
             work_pool_name=PRODUCTION_POOL_NAME,
             schedules=[
                 CronSchedule(
-                    cron="0 11 * * *",
+                    cron="0 10 * * *",
                     timezone="America/Argentina/Buenos_Aires"
                 )
             ],
