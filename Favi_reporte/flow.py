@@ -46,28 +46,31 @@ def limpiar_monto_valores(serie):
 # --- AJUSTE EN LA CARGA DE VALORES POR FECHAS ---
 
 def procesar_valores_por_fecha(df, columna_fecha='Fecha Vto.', columna_importe='Importe'):
-    # Aseguramos que la fecha sea formato datetime
     df[columna_fecha] = pd.to_datetime(df[columna_fecha], errors='coerce')
     df[columna_importe] = limpiar_monto_valores(df[columna_importe])
     
-    # Obtenemos el número de día de la semana (0=Lunes, 2=Miércoles, 4=Viernes)
-    # Importante: Esto depende de qué "semana" estemos hablando. 
-    # Generalmente comparamos contra la fecha de hoy.
     
-    hoy = pd.Timestamp.now()
-    # Miércoles de esta semana
-    miercoles = hoy + pd.Timedelta(days=(2 - hoy.dayofweek) % 7)
-    # Viernes de esta semana
-    viernes = hoy + pd.Timedelta(days=(4 - hoy.dayofweek) % 7)
-    # Lunes de la semana que viene
-    lunes_prox = hoy + pd.Timedelta(days=(7 - hoy.dayofweek) % 7)
+    # Hoy real (sacamos el harcodeo)
+    hoy = pd.Timestamp.now().normalize()
+    
+    # Definimos los límites de ESTA SEMANA
+    lunes_esta_semana = hoy - pd.Timedelta(days=hoy.dayofweek) # 04/05
+    miercoles = lunes_esta_semana + pd.Timedelta(days=2)       # 06/05
+    viernes = lunes_esta_semana + pd.Timedelta(days=4)         # 08/05
+    lunes_proximo = lunes_esta_semana + pd.Timedelta(days=7)   # 11/05
 
-    vto_miercoles = df[df[columna_fecha] <= miercoles][columna_importe].sum()
+    # --- REPARTO SIN MEZCLAR SEMANAS ---
+    
+    # 1. Miércoles: Solo lo que venció entre el lunes 04 y el miércoles 06 de ESTA semana
+    vto_miercoles = df[(df[columna_fecha] >= lunes_esta_semana) & (df[columna_fecha] <= miercoles)][columna_importe].sum()
+    
+    # 2. Viernes: Solo lo que vence jueves 07 y viernes 08 de ESTA semana
     vto_viernes = df[(df[columna_fecha] > miercoles) & (df[columna_fecha] <= viernes)][columna_importe].sum()
-    vto_lunes = df[df[columna_fecha] >= lunes_prox][columna_importe].sum()
+    
+    # 3. Lunes (FCI): Todo lo que sea del lunes que viene (11/05) en adelante
+    vto_lunes = df[df[columna_fecha] >= lunes_proximo][columna_importe].sum()
     
     return vto_miercoles, vto_viernes, vto_lunes
-
 
 
 print("🚀 Iniciando Proceso Integral de Pagos y Disponibilidad...")
@@ -178,27 +181,26 @@ def generar_reporte_excel():
 
 
     # 2. CARGAR Y CLASIFICAR VALORES
-    # Aplicamos la función a cada archivo (Asegurate que el nombre de la columna sea el correcto)
-    e_m, e_v, e_l = procesar_valores_por_fecha(df_echeqs)
-    cba_m, cba_v, cba_l = procesar_valores_por_fecha(df_cba)
-    bsas_m, bsas_v, bsas_l = procesar_valores_por_fecha(df_bsas)
+    # k = Miércoles (Columna K), m = Viernes (Columna M), n = Lunes (Columna N)
+    e_k, e_m, e_n = procesar_valores_por_fecha(df_echeqs)
+    cba_k, cba_m, cba_n = procesar_valores_por_fecha(df_cba)
+    bsas_k, bsas_m, bsas_n = procesar_valores_por_fecha(df_bsas)
 
-    # 4. CONSTRUIR TABLERO (Actualizando las celdas específicas)
-
+    # 4. CONSTRUIR TABLERO (Mapeo exacto)
     # Fila Echeq de terceros
-    df_tablero.at['Echeq de terceros', 'saldo online'] = e_m
-    df_tablero.at['Echeq de terceros', 'pendientes de acreditacion'] = e_v
-    df_tablero.at['Echeq de terceros', 'FCI'] = e_l
+    df_tablero.at['Echeq de terceros', 'saldo online'] = e_k               # Miércoles -> Col K
+    df_tablero.at['Echeq de terceros', 'pendientes de acreditacion'] = e_m # Viernes   -> Col M
+    df_tablero.at['Echeq de terceros', 'FCI'] = e_n                        # Lunes     -> Col N
 
     # Fila Cheques CBA
-    df_tablero.at['Cheques CBA', 'saldo online'] = cba_m
-    df_tablero.at['Cheques CBA', 'pendientes de acreditacion'] = cba_v
-    df_tablero.at['Cheques CBA', 'FCI'] = cba_l
+    df_tablero.at['Cheques CBA', 'saldo online'] = cba_k
+    df_tablero.at['Cheques CBA', 'pendientes de acreditacion'] = cba_m
+    df_tablero.at['Cheques CBA', 'FCI'] = cba_n
 
     # Fila Cheques BA
-    df_tablero.at['Cheques BA', 'saldo online'] = bsas_m
-    df_tablero.at['Cheques BA', 'pendientes de acreditacion'] = bsas_v
-    df_tablero.at['Cheques BA', 'FCI'] = bsas_l
+    df_tablero.at['Cheques BA', 'saldo online'] = bsas_k
+    df_tablero.at['Cheques BA', 'pendientes de acreditacion'] = bsas_m
+    df_tablero.at['Cheques BA', 'FCI'] = bsas_n
 
 
 
@@ -351,7 +353,7 @@ def main_flow():
     # 2. Si todo está ok, procesar y enviar
     try:
         ruta_excel = generar_reporte_excel()
-        enviar_mail(ruta_excel, estados)
+        #enviar_mail(ruta_excel, estados)
         logger.info("Proceso terminado exitosamente.")
     except Exception as e:
         logger.error(f"Fallo en el procesamiento: {e}")
