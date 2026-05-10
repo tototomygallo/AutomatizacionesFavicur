@@ -227,72 +227,94 @@ def generar_reporte_excel():
     resumen_metodos = df_p.groupby('Método de pago')['Saldo'].sum().reset_index()
     print(resumen_metodos.to_string(index=False, float_format="${:,.2f}".format))
 
-    # --- 5. EXPORTACIÓN CON DISEÑO AVANZADO ---
+    # --- 5. EXPORTACIÓN CON DISEÑO AVANZADO (CORREGIDO) ---
     df_p = df_p.fillna('')
     nombre_archivo = f'Reporte_Pagos_{datetime.now().strftime("%Y%m%d")}.xlsx'
+    
+    # SEPARAMOS LAS FILAS DEL TABLERO EN DOS PARA EL EXCEL
+    filas_valores = ['Echeq de terceros', 'Cheques CBA', 'Cheques BA']
+    df_tablero_bancos = df_tablero.drop(index=filas_valores, errors='ignore')
+    # Borramos el total viejo que tenía todo sumado y hacemos uno nuevo solo con bancos
+    if 'TOTAL' in df_tablero_bancos.index:
+        df_tablero_bancos = df_tablero_bancos.drop(index='TOTAL')
+        
+    df_tablero_bancos.loc['TOTAL'] = df_tablero_bancos.sum()
+    df_tablero_cheques = df_tablero.loc[df_tablero.index.isin(filas_valores)].copy()
+    df_tablero_cheques.loc['TOTAL CHEQUES'] = df_tablero_cheques.sum() # <--- Nueva fila de total
+    # CAMBIAMOS NOMBRES DE COLUMNAS SOLO PARA LA TABLA DE CHEQUES
+    df_tablero_cheques.columns = [
+        'proveedores pendientes', 
+        'otros pagos pendientes', 
+        'miércoles', 
+        'saldo-pagos', 
+        'viernes', 
+        'lunes', 
+        'saldo con pendientes y FCI'
+    ]
+
     with pd.ExcelWriter(nombre_archivo, engine='xlsxwriter') as writer:
-        # 1. Escribir Detalle_Pagos (Tabla Izquierda)
+        # 1. Detalle_Pagos (Tabla Izquierda)
         df_p.to_excel(writer, sheet_name='Tablero Final', index=False, startcol=0)
         
-        # 2. Escribir Tablero_Control (Tabla Derecha - Amarillo Pastel)
+        # 2. Tablero de BANCOS (Tabla Derecha Arriba)
         col_inicio_tablero = len(df_p.columns) + 1
-        df_tablero.to_excel(writer, sheet_name='Tablero Final', startcol=col_inicio_tablero)
+        df_tablero_bancos.to_excel(writer, sheet_name='Tablero Final', startcol=col_inicio_tablero, startrow=0)
+
+        # 3. Tablero de CHEQUES (Tabla Derecha Abajo - 2 renglones de espacio)
+        # Calculamos: filas de bancos + header (1) + espacio (2)
+        fila_inicio_cheques = len(df_tablero_bancos) + 3
+        df_tablero_cheques.to_excel(writer, sheet_name='Tablero Final', startcol=col_inicio_tablero, startrow=fila_inicio_cheques)
 
         workbook  = writer.book
         worksheet = writer.sheets['Tablero Final']
 
-        # FORMATOS
+        # --- TUS FORMATOS (Sin cambios) ---
         fmt_azul = workbook.add_format({'bg_color': '#1F4E78', 'font_color': 'white', 'bold': True, 'border': 1})
         fmt_verde = workbook.add_format({'bg_color': "#2DAC62", 'font_color': 'white', 'bold': True, 'border': 1})
-        
         fmt_blanco = workbook.add_format({'bg_color': "#FFFFFF", 'border': 1, 'num_format': '#,##0.00'})
         fmt_amarillo_pastel = workbook.add_format({'bg_color': "#FFEEBB", 'border': 1, 'num_format': '#,##0.00'})
         fmt_azul_pastel = workbook.add_format({'bg_color': "#BDD4E7", 'border': 1, 'num_format': '#,##0.00'})
         fmt_gris_total = workbook.add_format({'bg_color': '#D9D9D9', 'bold': True, 'border': 1, 'num_format': '#,##0.00'})
-        fmt_negativo = workbook.add_format({'font_color': '#9C0006', 'bg_color': '#FFC7CE'}) # Rojo suave para negativos
+        fmt_negativo = workbook.add_format({'font_color': '#9C0006', 'bg_color': '#FFC7CE'})
         fmt_moneda = workbook.add_format({'num_format': '#,##0.00', 'border': 1})
+        fmt_rojo = workbook.add_format({'bg_color': "#C04A4A", 'font_color': 'white', 'bold': True, 'border': 1})
 
-        # Pintar encabezados tabla detalle
+        # PINTAR ENCABEZADOS (Detalle y Bancos)
         for col_num, value in enumerate(df_p.columns.values):
             worksheet.write(0, col_num, value, fmt_azul)
-
-        # Pintar encabezados tablero
+        
         worksheet.write(0, col_inicio_tablero, "Concepto", fmt_verde)
-        for col_num, value in enumerate(df_tablero.columns.values):
+        for col_num, value in enumerate(df_tablero_bancos.columns.values):
             worksheet.write(0, col_inicio_tablero + col_num + 1, value, fmt_verde)
 
-    # --- 1. PINTAR TABLA DETALLE (Izquierda) ---
-        for r in range(1, len(df_p) + 1):
-            # Elegimos formato según si la fila es par o impar
-            # r % 2 == 0 pintará las filas 2, 4, 6 de Excel (posiciones pares del loop)
-            fmt_fila = fmt_azul_pastel if r % 2 == 0 else fmt_blanco
-            
-            for c in range(len(df_p.columns)):
-                val = df_p.iloc[r-1, c]
-                worksheet.write(r, c, val, fmt_fila)
+        # PINTAR ENCABEZADOS (Cheques - Abajo)
+        worksheet.write(fila_inicio_cheques, col_inicio_tablero, "Concepto", fmt_rojo)
+        for col_num, value in enumerate(df_tablero_cheques.columns.values):
+            worksheet.write(fila_inicio_cheques, col_inicio_tablero + col_num + 1, value, fmt_rojo)
 
-        for r in range(1, len(df_tablero)):
-
+        # PINTAR FILAS DE BANCOS
+        for r in range(1, len(df_tablero_bancos) + 1):
             fmt_fila = fmt_amarillo_pastel if r % 2 == 0 else fmt_blanco
-            for c in range(len(df_tablero.columns) + 1):
-                worksheet.write(r, col_inicio_tablero + c, df_tablero.iloc[r-1, c-1] if c > 0 else df_tablero.index[r-1], fmt_fila)
+            # Si es la última fila (TOTAL), usar gris
+            if df_tablero_bancos.index[r-1] == 'TOTAL': fmt_fila = fmt_gris_total
+            
+            worksheet.write(r, col_inicio_tablero, df_tablero_bancos.index[r-1], fmt_fila)
+            for c in range(len(df_tablero_bancos.columns)):
+                worksheet.write(r, col_inicio_tablero + c + 1, df_tablero_bancos.iloc[r-1, c], fmt_fila)
 
-        # Pintar fila TOTAL en gris
-        fila_total = len(df_tablero)
-        worksheet.write(fila_total, col_inicio_tablero, "TOTAL", fmt_gris_total)
-        for c in range(1, len(df_tablero.columns) + 1):
-            worksheet.write(fila_total, col_inicio_tablero + c, df_tablero.iloc[-1, c-1], fmt_gris_total)
+        # PINTAR FILAS DE CHEQUES
+        for r in range(1, len(df_tablero_cheques) + 1):
+            fila_excel = fila_inicio_cheques + r
+            fmt_fila = fmt_amarillo_pastel if r % 2 == 0 else fmt_blanco
+            if df_tablero_cheques.index[r-1] == 'TOTAL CHEQUES': fmt_fila = fmt_gris_total
+            worksheet.write(fila_excel, col_inicio_tablero, df_tablero_cheques.index[r-1], fmt_fila)
+            for c in range(len(df_tablero_cheques.columns)):
+                worksheet.write(fila_excel, col_inicio_tablero + c + 1, df_tablero_cheques.iloc[r-1, c], fmt_fila)
 
-        # FORMATO CONDICIONAL: Pintar de ROJO los negativos en TODA la hoja
-        worksheet.conditional_format('A1:XFD1048576', {
-            'type':     'cell',
-            'criteria': '<',
-            'value':    0,
-            'format':   fmt_negativo
-        })
-
-        # Ajustar anchos
+        # FORMATO CONDICIONAL Y ANCHOS
+        worksheet.conditional_format('A1:XFD1048576', {'type': 'cell', 'criteria': '<', 'value': 0, 'format': fmt_negativo})
         worksheet.set_column(0, 50, 18, fmt_moneda)
+
     return nombre_archivo
 
 print(f"\n✅ Reporte completo. Los negativos ahora resaltan en rojo y el tablero es amarillo pastel.")
@@ -353,7 +375,7 @@ def main_flow():
     # 2. Si todo está ok, procesar y enviar
     try:
         ruta_excel = generar_reporte_excel()
-        #enviar_mail(ruta_excel, estados)
+        enviar_mail(ruta_excel, estados)
         logger.info("Proceso terminado exitosamente.")
     except Exception as e:
         logger.error(f"Fallo en el procesamiento: {e}")
