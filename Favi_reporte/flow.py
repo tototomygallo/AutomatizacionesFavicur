@@ -125,11 +125,29 @@ def generar_reporte_excel():
     df_p.loc[df_p['Método de pago'] == 'Transferencia', 'Método de pago'] = 'Galicia'
 
 
-    # 2. CARGAR VALORES (Drive)
-    df_echeqs = pd.read_excel(os.path.join(RUTA_DRIVE, 'eCheqs.xlsx'))
-    df_cba = pd.read_excel(os.path.join(RUTA_DRIVE, 'Cheques Físicos CBA.xlsx'))
-    df_bsas = pd.read_excel(os.path.join(RUTA_DRIVE, 'Cheques Físicos BS AS.xlsx'))
+ # --- 2. CARGAR Y CLASIFICAR VALORES (Desde un solo archivo) ---
+    path_valores = os.path.join(RUTA_DRIVE, 'Valores Disponibles.xlsx')
+    df_valores_all = pd.read_excel(path_valores)
+    
+    # Aseguramos que los tipos sean numéricos para filtrar bien
+    df_valores_all['Caja'] = pd.to_numeric(df_valores_all['Caja'], errors='coerce')
+    df_valores_all['Cod.Tipo'] = pd.to_numeric(df_valores_all['Cod.Tipo'], errors='coerce')
 
+    # Aplicamos los filtros de Pri:
+    # 1. Echeqs: Códigos 60 y 61
+    df_echeqs = df_valores_all[df_valores_all['Cod.Tipo'].isin([60, 61])].copy()
+    
+    # 2. Cheques CBA: Códigos 20 o 33 Y Caja 1
+    df_cba = df_valores_all[
+        (df_valores_all['Cod.Tipo'].isin([20, 33])) & 
+        (df_valores_all['Caja'] == 1)
+    ].copy()
+    
+    # 3. Cheques BA: Códigos 20 o 33 Y Caja 5
+    df_bsas = df_valores_all[
+        (df_valores_all['Cod.Tipo'].isin([20, 33])) & 
+        (df_valores_all['Caja'] == 5)
+    ].copy()
     total_echeqs = limpiar_monto_valores(df_echeqs['Importe']).sum()
     total_cba = limpiar_monto_valores(df_cba['Importe']).sum()
     total_bsas = limpiar_monto_valores(df_bsas['Importe']).sum()
@@ -360,9 +378,10 @@ def main_flow():
     fuentes = [
         'Vencimientos de proveedores.xlsx', 
         'Proveedores a pagar - Odoo.xlsx', 
-        'eCheqs.xlsx', 
-        'Cheques Físicos CBA.xlsx', 
-        'Cheques Físicos BS AS.xlsx', 
+        #'eCheqs.xlsx', 
+        #'Cheques Físicos CBA.xlsx', 
+        #'Cheques Físicos BS AS.xlsx',
+        'Valores Disponibles.xlsx', 
         'Cuentas Contables.csv', 
         'Cuentas Contables (1).csv'
     ]
