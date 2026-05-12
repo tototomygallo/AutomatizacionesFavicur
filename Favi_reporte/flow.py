@@ -26,8 +26,8 @@ LIMITE_TRANSFERENCIA = 300000
 # --- CONFIGURACIÓN DE RUTAS Y PARÁMETROS ---
 LOGGER_GLOBAL = PrefectLogger(__file__)
 LIMITE_TRANSFERENCIA = 300000
-DESTINATARIOS = ["tomas.gallo@consulters.com.ar", "priscila.scharf@consulters.com.ar"]
-#DESTINATARIOS = ["gmacho@favicur.com.ar", "daguero@favicur.com.ar", "tomas.gallo@consulters.com.ar", "priscila.scharf@consulters.com.ar"]
+#DESTINATARIOS = ["tomas.gallo@consulters.com.ar", "priscila.scharf@consulters.com.ar"]
+DESTINATARIOS = ["gmacho@favicur.com.ar", "daguero@favicur.com.ar", "tomas.gallo@consulters.com.ar", "priscila.scharf@consulters.com.ar"]
 
 # CONFIG MAIL (Desde Prefect Secrets)
 MAIL_SERVER = "smtp.gmail.com"
@@ -62,15 +62,25 @@ def procesar_valores_por_fecha(df, columna_fecha='Fecha Vto.', columna_importe='
     # --- REPARTO SIN MEZCLAR SEMANAS ---
     
     # 1. Miércoles: Solo lo que venció entre el lunes 04 y el miércoles 06 de ESTA semana
-    #vto_miercoles = df[(df[columna_fecha] >= lunes_esta_semana) & (df[columna_fecha] <= miercoles)][columna_importe].sum()
-    vto_miercoles = df[(df[columna_fecha] <= miercoles)][columna_importe].sum()
+    vto_miercoles = df[(df[columna_fecha] >= lunes_esta_semana) & (df[columna_fecha] <= miercoles)][columna_importe].sum()
+    #vto_miercoles = df[(df[columna_fecha] <= miercoles)][columna_importe].sum()
   
     # 2. Viernes: Solo lo que vence jueves 07 y viernes 08 de ESTA semana
     vto_viernes = df[(df[columna_fecha] > miercoles) & (df[columna_fecha] <= viernes)][columna_importe].sum()
     
     # 3. Lunes (FCI): Todo lo que sea del lunes que viene (11/05) en adelante
-    vto_lunes = df[df[columna_fecha] >= lunes_proximo][columna_importe].sum()
+    vto_lunes = df[(df[columna_fecha] > viernes) & (df[columna_fecha] <= lunes_proximo)][columna_importe].sum()
     
+
+    print("MIERCOLES")
+    print(df[(df[columna_fecha] >= lunes_esta_semana) & (df[columna_fecha] <= miercoles)][[columna_fecha, columna_importe]])
+
+    print("VIERNES")
+    print(df[(df[columna_fecha] > miercoles) & (df[columna_fecha] <= viernes)][[columna_fecha, columna_importe]])
+
+    print("LUNES")
+    print(df[(df[columna_fecha] > viernes) & (df[columna_fecha] <= lunes_proximo)][[columna_fecha, columna_importe]])
+
     return vto_miercoles, vto_viernes, vto_lunes
 
 
@@ -147,6 +157,7 @@ def generar_reporte_excel():
  # --- 2. CARGAR Y CLASIFICAR VALORES (Desde un solo archivo) ---
     path_valores = os.path.join(RUTA_DRIVE, 'Valores Disponibles.xlsx')
     df_valores_all = pd.read_excel(path_valores)
+    #path_valores = pd.read_excel("/home/favidw/favicur/automatizaciones/Python/Valores Disponibles.xlsx")
     
     # Aseguramos que los tipos sean numéricos para filtrar bien
     df_valores_all['Caja'] = pd.to_numeric(df_valores_all['Caja'], errors='coerce')
@@ -413,7 +424,7 @@ def main_flow():
     # 2. Si todo está ok, procesar y enviar
     try:
         ruta_excel = generar_reporte_excel()
-        #enviar_mail(ruta_excel, estados)
+        enviar_mail(ruta_excel, estados)
         logger.info("Proceso terminado exitosamente.")
     except Exception as e:
         logger.error(f"Fallo en el procesamiento: {e}")
