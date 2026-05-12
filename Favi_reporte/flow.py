@@ -62,8 +62,9 @@ def procesar_valores_por_fecha(df, columna_fecha='Fecha Vto.', columna_importe='
     # --- REPARTO SIN MEZCLAR SEMANAS ---
     
     # 1. Miércoles: Solo lo que venció entre el lunes 04 y el miércoles 06 de ESTA semana
-    vto_miercoles = df[(df[columna_fecha] >= lunes_esta_semana) & (df[columna_fecha] <= miercoles)][columna_importe].sum()
-    
+    #vto_miercoles = df[(df[columna_fecha] >= lunes_esta_semana) & (df[columna_fecha] <= miercoles)][columna_importe].sum()
+    vto_miercoles = df[(df[columna_fecha] <= miercoles)][columna_importe].sum()
+  
     # 2. Viernes: Solo lo que vence jueves 07 y viernes 08 de ESTA semana
     vto_viernes = df[(df[columna_fecha] > miercoles) & (df[columna_fecha] <= viernes)][columna_importe].sum()
     
@@ -111,19 +112,37 @@ def generar_reporte_excel():
 
     # Definimos qué métodos están sujetos a "convertirse" en transferencia si son montos chicos
     # (Agregá acá los que Gabriel ignoraría si son < 300k)
+    # Métodos que pueden pasar a transferencia
     metodos_convertibles = ['Echeq de terceros', 'Cheques CBA', 'Cheques BA']
 
-    # Aplicamos la condición: 
-    # Si (el Saldo es < 300k) Y (el Método actual está en nuestra lista de convertibles)
+    # Filtramos solo esos métodos
+    mask_convertibles = df_p['Método de pago'].isin(metodos_convertibles)
+
+    # Calculamos el total por proveedor
+    # Reemplazá 'Proveedor' por el nombre real de la columna si se llama distinto
+    totales_por_proveedor = (
+        df_p[mask_convertibles]
+        .groupby('Proveedor')['Saldo']
+        .sum()
+    )
+
+    # Proveedores cuyo total es menor al límite
+    proveedores_a_transferencia = totales_por_proveedor[
+        totales_por_proveedor < LIMITE_TRANSFERENCIA
+    ].index
+
+    # Cambiamos a Transferencia todas las filas de esos proveedores
     df_p.loc[
-        (df_p["Saldo"] < LIMITE_TRANSFERENCIA) & 
-        (df_p["Método de pago"].isin(metodos_convertibles)), 
+        mask_convertibles &
+        df_p['Proveedor'].isin(proveedores_a_transferencia),
         'Método de pago'
     ] = 'Transferencia'
 
-    # Luego, como ya hacías, pasamos las transferencias a Galicia
-    df_p.loc[df_p['Método de pago'] == 'Transferencia', 'Método de pago'] = 'Galicia'
-
+    # Transferencia -> Galicia
+    df_p.loc[
+        df_p['Método de pago'] == 'Transferencia',
+        'Método de pago'
+    ] = 'Galicia'
 
  # --- 2. CARGAR Y CLASIFICAR VALORES (Desde un solo archivo) ---
     path_valores = os.path.join(RUTA_DRIVE, 'Valores Disponibles.xlsx')
@@ -172,7 +191,7 @@ def generar_reporte_excel():
     mapa_bancos = {
         'Bancor': 'PCIA DE CORDOBA', 'Nación': 'NACION', 'ICBC': 'ICBC', 
         'Patagonia': 'PATAGONIA', 'Macro': 'MACRO', 'Galicia': 'GALICIA', 
-        'Credicoop': 'CREDICOOP', 'Comafi': 'COMAFI'
+        'Credicoop': 'CREDICOOP', 'Comafi': 'COMAFI', 'Mercado Pago': 'MERCADO PAGO'
     }
     for b, term in mapa_bancos.items():
         saldo = df_cc[df_cc['Descripcion'].str.contains(term, na=False)]['Saldo fecha'].sum()
@@ -394,7 +413,7 @@ def main_flow():
     # 2. Si todo está ok, procesar y enviar
     try:
         ruta_excel = generar_reporte_excel()
-        enviar_mail(ruta_excel, estados)
+        #enviar_mail(ruta_excel, estados)
         logger.info("Proceso terminado exitosamente.")
     except Exception as e:
         logger.error(f"Fallo en el procesamiento: {e}")
