@@ -31,12 +31,12 @@ def enviar_recordatorio_dia_anterior():
     msg["Subject"] = "Recordatorio carga de archivos reporte Pago a Proveedores"
 
     body = f"""
-Buen día,
+Buenas tardes,
 
 No olviden subir los archivos al Drive:
 {LINK_CARPETA}
 
-Recuerden que si no suben, el reporte no se actualizará, por lo tanto, no enviará datos.
+Recuerden que si no suben los archivos, el reporte se enviará desactualizado
 
 Saludos
 """

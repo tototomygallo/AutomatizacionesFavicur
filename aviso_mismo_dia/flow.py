@@ -36,7 +36,7 @@ Buen día,
 No olviden subir los archivos al Drive:
 {LINK_CARPETA}
 
-Recuerden que si no suben, el reporte no se actualizará, por lo tanto, no enviará datos.
+Recuerden que si no suben los archivos, el reporte se enviará desactualizado
 
 Saludos
 """
