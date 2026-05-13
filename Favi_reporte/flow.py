@@ -27,8 +27,7 @@ LIMITE_TRANSFERENCIA = 300000
 LOGGER_GLOBAL = PrefectLogger(__file__)
 LIMITE_TRANSFERENCIA = 300000
 #DESTINATARIOS = ["tomas.gallo@consulters.com.ar", "priscila.scharf@consulters.com.ar"]
-DESTINATARIOS = ["gmacho@favicur.com.ar", "daguero@favicur.com.ar", "tomas.gallo@consulters.com.ar", "priscila.scharf@consulters.com.ar"]
-
+DESTINATARIOS = ["gmacho@favicur.com.ar", "daguero@favicur.com.ar", "tomas.gallo@consulters.com.ar", "priscila.scharf@consulters.com.ar", "jpinones@favicur.com.ar", "ignacio@favicur.com.ar"]
 # CONFIG MAIL (Desde Prefect Secrets)
 MAIL_SERVER = "smtp.gmail.com"
 MAIL_PORT = 587
@@ -58,11 +57,11 @@ def procesar_valores_por_fecha(df, columna_fecha='Fecha Vto.', columna_importe='
     miercoles = lunes_esta_semana + pd.Timedelta(days=2)       # 06/05
     viernes = lunes_esta_semana + pd.Timedelta(days=4)         # 08/05
     lunes_proximo = lunes_esta_semana + pd.Timedelta(days=7)   # 11/05
-
+    inicio_ventana_miercoles = miercoles - pd.Timedelta(days=28)
     # --- REPARTO SIN MEZCLAR SEMANAS ---
     
     # 1. Miércoles: Solo lo que venció entre el lunes 04 y el miércoles 06 de ESTA semana
-    vto_miercoles = df[(df[columna_fecha] >= lunes_esta_semana) & (df[columna_fecha] <= miercoles)][columna_importe].sum()
+    vto_miercoles = df[(df[columna_fecha] >= inicio_ventana_miercoles) & (df[columna_fecha] <= miercoles)][columna_importe].sum()
     #vto_miercoles = df[(df[columna_fecha] <= miercoles)][columna_importe].sum()
   
     # 2. Viernes: Solo lo que vence jueves 07 y viernes 08 de ESTA semana
@@ -267,6 +266,9 @@ def generar_reporte_excel():
     )
     # Fila de TOTAL
     df_tablero.loc['TOTAL'] = df_tablero.sum()
+
+
+    df_tablero = df_tablero.rename(columns={'saldo online': 'saldo contable'})
 
     # 5. EXPORTACIÓN COMPLETA
     print("\n" + "="*40)

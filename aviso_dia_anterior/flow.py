@@ -16,8 +16,7 @@ MAIL_USER = "tomas.gallo@consulters.com.ar"
 MAIL_PASSWORD = read_secret("claveemail")
 
 #DESTINATARIOS = ["tomas.gallo@consulters.com.ar", "priscila.scharf@consulters.com.ar"]
-DESTINATARIOS = ["gmacho@favicur.com.ar", "daguero@favicur.com.ar", "tomas.gallo@consulters.com.ar", "priscila.scharf@consulters.com.ar"]
-
+DESTINATARIOS = ["gmacho@favicur.com.ar", "daguero@favicur.com.ar", "tomas.gallo@consulters.com.ar", "priscila.scharf@consulters.com.ar", "jpinones@favicur.com.ar", "ignacio@favicur.com.ar"]
 LINK_CARPETA = "https://drive.google.com/drive/folders/18xN7H-ocrXce9w-2lTOicnEgdoUAp2S_"
 
 
