@@ -21,7 +21,7 @@ print(ENV)
 
 DEPLOY_NAME = "Paso intermedio de metodos de pago"
 
-ENTRYPOINT = "Favi_reporte/flow.py:flujo_intermedio_940"
+ENTRYPOINT = "Intermedio_completar/flow.py:flujo_intermedio_940"
 
 DEVELOPMENT_POOL_NAME = "local"
 PRODUCTION_POOL_NAME = "favicur-pool"
