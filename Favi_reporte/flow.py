@@ -24,6 +24,7 @@ ARCHIVO_MAESTRO_PAGOS = 'Cruce_intermedio_Pagos.xlsx'
 
 # --- CONFIGURACIÓN ---
 LOGGER_GLOBAL = PrefectLogger(__file__)
+#DESTINATARIOS = ["tomas.gallo@consulters.com.ar"]
 DESTINATARIOS = ["gmacho@favicur.com.ar", "daguero@favicur.com.ar", "tomas.gallo@consulters.com.ar", "priscila.scharf@consulters.com.ar", "jpinones@favicur.com.ar", "ignacio@favicur.com.ar"]
 
 # CONFIG MAIL (Desde Prefect Secrets)
@@ -65,16 +66,20 @@ def procesar_valores_por_fecha(df, hoy_base, columna_fecha='Fecha Vto.', columna
     df[columna_importe] = limpiar_monto_valores(df[columna_importe])
     
     lunes_esta_semana = hoy_base - pd.Timedelta(days=hoy_base.dayofweek) 
+    martes = lunes_esta_semana + pd.Timedelta(days=1)
     miercoles = lunes_esta_semana + pd.Timedelta(days=2)       
+    jueves = lunes_esta_semana + pd.Timedelta(days=3)
     viernes = lunes_esta_semana + pd.Timedelta(days=4)         
-    lunes_proximo = lunes_esta_semana + pd.Timedelta(days=7)   
-    inicio_ventana_miercoles = miercoles - pd.Timedelta(days=28)
     
-    vto_miercoles = df[(df[columna_fecha] >= inicio_ventana_miercoles) & (df[columna_fecha] <= miercoles)][columna_importe].sum()
-    vto_viernes = df[(df[columna_fecha] > miercoles) & (df[columna_fecha] <= viernes)][columna_importe].sum()
-    vto_lunes = df[(df[columna_fecha] > viernes) & (df[columna_fecha] <= lunes_proximo)][columna_importe].sum()
+    inicio_ventana_lunes = lunes_esta_semana - pd.Timedelta(days=28)
     
-    return vto_miercoles, vto_viernes, vto_lunes
+    vto_lunes = df[(df[columna_fecha] >= inicio_ventana_lunes) & (df[columna_fecha] <= lunes_esta_semana)][columna_importe].sum()
+    vto_martes = df[df[columna_fecha] == martes][columna_importe].sum()
+    vto_miercoles = df[df[columna_fecha] == miercoles][columna_importe].sum()
+    vto_jueves = df[df[columna_fecha] == jueves][columna_importe].sum()
+    vto_viernes = df[df[columna_fecha] == viernes][columna_importe].sum()
+    
+    return vto_lunes, vto_martes, vto_miercoles, vto_jueves, vto_viernes
 
 
 @task(retries=2)
@@ -94,6 +99,29 @@ def verificar_estado_fuentes(archivos: List[str]) -> Dict[str, str]:
     return estados
 
 
+def normalizar_termino_pago(val):
+    if pd.isna(val):
+        return "Sin Especificar"
+    
+    s = str(val).strip().lower()
+    
+    # 1. Extraemos todos los dígitos numéricos que tenga el string
+    numeros = ''.join([c for c in s if c.isdigit()])
+    
+    # 2. Si tiene números, evaluamos según la cantidad de días
+    if numeros:
+        if numeros == "0":
+            return "Pago inmediato"
+        else:
+            return f"A {numeros} días"
+            
+    # 3. Si no tiene números, buscamos palabras clave textuales
+    if 'inmediato' in s:
+        return "Pago inmediato"
+        
+    return val.strip().capitalize()
+
+
 def calcular_datos_tablero(hoy_base):
     logger = LOGGER_GLOBAL.obtener_logger_prefect()
     
@@ -106,10 +134,11 @@ def calcular_datos_tablero(hoy_base):
     path_maestro = os.path.join(RUTA_DRIVE, ARCHIVO_MAESTRO_PAGOS)
     df_p = pd.read_excel(path_maestro)
 
+    # Mapeo flexible de columnas críticas
     mapeo_columnas = {}
     for col in df_p.columns:
         col_str = str(col)
-        if 'NAMERO' in col_str.upper() or 'NÃ' in col_str or 'NÚMERO' in col_str.upper() or 'NUMERO' in col_str.upper():
+        if any(x in col_str.upper() for x in ['NAMERO', 'NÃ', 'NÚMERO', 'NUMERO']):
             mapeo_columnas[col] = 'Número'
     if mapeo_columnas:
         df_p = df_p.rename(columns=mapeo_columnas)
@@ -120,11 +149,9 @@ def calcular_datos_tablero(hoy_base):
     logger.info(f"Para el rango {lunes_semana.strftime('%d/%m')} al {domingo_semana.strftime('%d/%m')}, se encontraron {len(df_p)} registros de proveedores.")
 
     df_p['Saldo'] = limpiar_monto_apex(df_p['Saldo'])
-    
-    # 👇 CAMBIO: Pasamos temporalmente todo a MAYÚSCULAS para estandarizar errores de tipeo
     df_p['Método de pago'] = df_p['Método de pago'].fillna('#N/D').astype(str).str.strip().str.upper()
 
-    # CAMBIO: Lógica de convertibles adaptada a las MAYÚSCULAS
+    # 👇 CORRECCIÓN MÁSCARA: Agrupamos y convertimos según corresponda
     metodos_convertibles = ['ECHEQ DE TERCEROS', 'CHEQUES CBA', 'CHEQUES BA']
     mask_convertibles = df_p['Método de pago'].isin(metodos_convertibles)
 
@@ -134,32 +161,69 @@ def calcular_datos_tablero(hoy_base):
     df_p.loc[mask_convertibles & df_p['Proveedor'].isin(proveedores_a_transferencia), 'Método de pago'] = 'TRANSFERENCIA'
     df_p.loc[df_p['Método de pago'] == 'TRANSFERENCIA', 'Método de pago'] = 'GALICIA'
     
-    # 👇 CAMBIO: Mapeo estricto para traducir las mayúsculas al nombre exacto del Tablero
+    # --- CONSTRUCCIÓN TABLA NUEVA: EXPANSIÓN ECHEQS DE TERCEROS ---
+    # --- CONSTRUCCIÓN TABLA NUEVA: EXPANSIÓN ECHEQS DE TERCEROS ---
+    col_terminos = [
+        c for c in df_p.columns 
+        if 'PAGO' in str(c).upper() and ('MIN' in str(c).upper() or 'TERM' in str(c).upper())
+    ]    
+    
+    # 1. 👇 LISTA FIJA CORREGIDA (Con la "A " inicial y soporte para todos los plazos de Odoo)
+    modalidades_fijas = [
+        "Pago inmediato", 
+        "A 7 días", 
+        "A 15 días", 
+        "A 30 días", 
+        "A 45 días", 
+        "A 60 días", 
+        "A 90 días", 
+        "A 120 días", 
+        "Pago inmediato"
+    ]
+    if col_terminos:
+        col_actual_terminos = col_terminos[0]
+        # Filtrar registros que efectivamente quedaron como Echeq de Terceros
+        df_solo_echeqs = df_p[df_p['Método de pago'] == 'ECHEQ DE TERCEROS'].copy()
+        print("SOLO ECHEQSSSS",df_solo_echeqs)
+        
+        if not df_solo_echeqs.empty:
+            print("GUARDAAA", df_solo_echeqs[col_actual_terminos].apply(normalizar_termino_pago))
+            df_solo_echeqs['Termino_Normalizado'] = df_solo_echeqs[col_actual_terminos].apply(normalizar_termino_pago)
+            df_agrupado_echeqs = df_solo_echeqs.groupby('Termino_Normalizado')['Saldo'].sum().reset_index()
+            df_agrupado_echeqs.columns = ['Modalidad Echeqs', 'Monto Pendiente']
+            
+            # Pasamos la columna a índice temporal para reindexar con la lista fija
+            df_agrupado_echeqs = df_agrupado_echeqs.set_index('Modalidad Echeqs')
+        else:
+            # Si no hay echeqs, creamos un DataFrame vacío con la estructura correcta
+            df_agrupado_echeqs = pd.DataFrame(columns=['Monto Pendiente'])
+            df_agrupado_echeqs.index.name = 'Modalidad Echeqs'
+            
+        # 2. Forzamos a que estén todas las modalidades fijas. Si faltan, pone 0.0
+        df_agrupado_echeqs = df_agrupado_echeqs.reindex(modalidades_fijas, fill_value=0.0).reset_index()
+        
+        # 3. Calculamos el total sobre la estructura completa
+        tot_exp = df_agrupado_echeqs['Monto Pendiente'].sum()
+        fila_tot_exp = pd.DataFrame([{'Modalidad Echeqs': 'TOTAL EXPANSION', 'Monto Pendiente': tot_exp}])
+        df_expansion_echeqs = pd.concat([df_agrupado_echeqs, fila_tot_exp], ignore_index=True)
+        
+    else:
+        # En caso extremo de que no exista la columna en el Excel, arma la estructura con ceros
+        df_agrupado_echeqs = pd.DataFrame({'Modalidad Echeqs': modalidades_fijas, 'Monto Pendiente': 0.0})
+        fila_tot_exp = pd.DataFrame([{'Modalidad Echeqs': 'TOTAL EXPANSION', 'Monto Pendiente': 0.0}])
+        df_expansion_echeqs = pd.concat([df_agrupado_echeqs, fila_tot_exp], ignore_index=True)
+
     mapeo_metodos_tablero = {
-        'MERCADO PAGO': 'Mercado Pago',
-        'MERCADOPAGO': 'Mercado Pago',
-        'BANCOR': 'Bancor',
-        'NACION': 'Nación',
-        'NACIÓN': 'Nación',
-        'ICBC': 'ICBC',
-        'PATAGONIA': 'Patagonia',
-        'MACRO': 'Macro',
-        'CREDICOOP': 'Credicoop',
-        'COMAFI': 'Comafi',
-        'GALICIA': 'Galicia',
-        'BECERRA/BALANZ': 'Becerra/Balanz',
-        'BALANZ': 'Becerra/Balanz',
-        'TSA': 'TSA',
-        'EFECTIVO': 'Efectivo',
-        'ECHEQ DE TERCEROS': 'Echeq de terceros',
-        'CHEQUES CBA': 'Cheques CBA',
-        'CHEQUES BA': 'Cheques BA'
+        'MERCADO PAGO': 'Mercado Pago', 'MERCADOPAGO': 'Mercado Pago', 'BANCOR': 'Bancor',
+        'NACION': 'Nación', 'NACIÓN': 'Nación', 'ICBC': 'ICBC', 'PATAGONIA': 'Patagonia',
+        'MACRO': 'Macro', 'CREDICOOP': 'Credicoop', 'COMAFI': 'Comafi', 'GALICIA': 'Galicia',
+        'BECERRA/BALANZ': 'Becerra/Balanz', 'BALANZ': 'Becerra/Balanz', 'TSA': 'TSA',
+        'EFECTIVO': 'Efectivo', 'ECHEQ DE TERCEROS': 'Echeq de terceros',
+        'CHEQUES CBA': 'Cheques CBA', 'CHEQUES BA': 'Cheques BA'
     }
     
-    # Reemplazamos los valores por el nombre correcto del tablero
     df_p['Método de pago'] = df_p['Método de pago'].map(mapeo_metodos_tablero).fillna(df_p['Método de pago'].str.title())
     
-    # 👇 AGREGAR FILA DE TOTAL PARA EL CRUCE DE PROVEEDORES (IZQUIERDA)
     if not df_p.empty:
         total_saldo_cruce = df_p['Saldo'].sum()
         fila_total_p = {col: '' for col in df_p.columns}
@@ -173,7 +237,6 @@ def calcular_datos_tablero(hoy_base):
             fila_total_p['Saldo'] = total_saldo_cruce
             
         df_p = pd.concat([df_p, pd.DataFrame([fila_total_p])], ignore_index=True)
-    # -------------------------------------------------------------------------
 
     # 2. CARGAR Y CLASIFICAR VALORES
     path_valores = os.path.join(RUTA_DRIVE, 'Valores Disponibles.xlsx')
@@ -211,7 +274,6 @@ def calcular_datos_tablero(hoy_base):
     df_imp_temp['Fecha Vto. Datetime'] = pd.to_datetime(df_imp_temp['Fecha Vto. Original'], errors='coerce')
     df_imp_temp = df_imp_temp[(df_imp_temp['Concepto'].notna()) & (df_imp_temp['Monto Original'] > 0)]
 
-    # --- CALCULO DIARIO BASADO EN EL HOY DINÁMICO ---
     martes_esta_semana = lunes_semana + pd.Timedelta(days=1)
     miercoles_esta_semana = lunes_semana + pd.Timedelta(days=2)
     jueves_esta_semana = lunes_semana + pd.Timedelta(days=3)
@@ -239,18 +301,12 @@ def calcular_datos_tablero(hoy_base):
     df_otros_pagos = df_otros_pagos[columnas_ordenadas]
     df_otros_pagos = df_otros_pagos[df_otros_pagos['Semana'] > 0].copy()
 
-    # 👇 SE AGREGA FILA DE TOTAL PARA LA TABLA DE OTROS PAGOS (IMPUESTOS)
     if not df_otros_pagos.empty:
         totales_imp = df_otros_pagos[['Semana', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes']].sum()
         fila_total_imp = pd.DataFrame([{
-            'Concepto': 'TOTAL IMPUESTOS',
-            'Banco': '',
-            'Semana': totales_imp['Semana'],
-            'Lunes': totales_imp['Lunes'],
-            'Martes': totales_imp['Martes'],
-            'Miércoles': totales_imp['Miércoles'],
-            'Jueves': totales_imp['Jueves'],
-            'Viernes': totales_imp['Viernes']
+            'Concepto': 'TOTAL IMPUESTOS', 'Banco': '', 'Semana': totales_imp['Semana'],
+            'Lunes': totales_imp['Lunes'], 'Martes': totales_imp['Martes'], 'Miércoles': totales_imp['Miércoles'],
+            'Jueves': totales_imp['Jueves'], 'Viernes': totales_imp['Viernes']
         }])
         df_otros_pagos = pd.concat([df_otros_pagos, fila_total_imp], ignore_index=True)
 
@@ -265,8 +321,8 @@ def calcular_datos_tablero(hoy_base):
         'Mercado Pago', 'Bancor', 'Nación', 'ICBC', 'Patagonia', 'Macro', 'Credicoop', 'Comafi', 'Galicia',
         'Becerra/Balanz', 'TSA', 'Efectivo', 'Echeq de terceros', 'Cheques CBA', 'Cheques BA'
     ]
-    columnas = ['proveedores pendientes', 'otros pagos pendientes', 'saldo online', 'saldo-pagos', 'pendientes de acreditacion', 'FCI', 'saldo con pendientes y FCI']
-
+    
+    columnas = ['proveedores pendientes', 'otros pagos pendientes', 'saldo online', 'saldo-pagos', 'martes', 'miercoles', 'jueves', 'viernes', 'FCI', 'saldo con pendientes y FCI']
     df_tablero = pd.DataFrame(index=filas_tablero, columns=columnas).fillna(0.0)
 
     mapa_bancos = {
@@ -278,13 +334,11 @@ def calcular_datos_tablero(hoy_base):
         saldo = df_cc[df_cc['Descripcion'].str.contains(term, na=False)]['Saldo fecha'].sum()
         df_tablero.at[b, 'saldo online'] = saldo
 
-    # Agrupar pagos (excluyendo la fila de TOTAL GENERAL para no duplicar en el tablero)
     resumen_pagos = df_p[df_p['Proveedor'] != 'TOTAL GENERAL'].groupby('Método de pago')['Saldo'].sum()
     for metodo, monto in resumen_pagos.items():
         if metodo in df_tablero.index:
             df_tablero.at[metodo, 'proveedores pendientes'] = monto
 
-    # Asignar también el total de otros pagos al banco MACRO en el tablero unificado
     if not df_otros_pagos.empty:
         total_semana_imp = df_otros_pagos[df_otros_pagos['Concepto'] == 'TOTAL IMPUESTOS']['Semana'].values[0]
         df_tablero.at['Macro', 'otros pagos pendientes'] = total_semana_imp
@@ -294,32 +348,41 @@ def calcular_datos_tablero(hoy_base):
         fci_valor = df_fci[df_fci['Descripcion'].str.contains(term, na=False)]['Saldo fecha'].sum()
         df_tablero.at[b, 'FCI'] = fci_valor
 
-    e_k, e_m, e_n = procesar_valores_por_fecha(df_echeqs, hoy_base)
-    cba_k, cba_m, cba_n = procesar_valores_por_fecha(df_cba, hoy_base)
-    bsas_k, bsas_m, bsas_n = procesar_valores_por_fecha(df_bsas, hoy_base)
+    e_lun, e_mar, e_mie, e_jue, e_vie = procesar_valores_por_fecha(df_echeqs, hoy_base)
+    cba_lun, cba_mar, cba_mie, cba_jue, cba_vie = procesar_valores_por_fecha(df_cba, hoy_base)
+    bsas_lun, bsas_mar, bsas_mie, bsas_jue, bsas_vie = procesar_valores_por_fecha(df_bsas, hoy_base)
 
-    df_tablero.at['Echeq de terceros', 'saldo online'] = e_k                
-    df_tablero.at['Echeq de terceros', 'pendientes de acreditacion'] = e_m 
-    df_tablero.at['Echeq de terceros', 'FCI'] = e_n                        
+    df_tablero.at['Echeq de terceros', 'saldo online'] = e_lun                    
+    df_tablero.at['Echeq de terceros', 'martes'] = e_mar 
+    df_tablero.at['Echeq de terceros', 'miercoles'] = e_mie                        
+    df_tablero.at['Echeq de terceros', 'jueves'] = e_jue
+    df_tablero.at['Echeq de terceros', 'viernes'] = e_vie
 
-    df_tablero.at['Cheques CBA', 'saldo online'] = cba_k
-    df_tablero.at['Cheques CBA', 'pendientes de acreditacion'] = cba_m
-    df_tablero.at['Cheques CBA', 'FCI'] = cba_n
+    df_tablero.at['Cheques CBA', 'saldo online'] = cba_lun
+    df_tablero.at['Cheques CBA', 'martes'] = cba_mar
+    df_tablero.at['Cheques CBA', 'miercoles'] = cba_mie
+    df_tablero.at['Cheques CBA', 'jueves'] = cba_jue
+    df_tablero.at['Cheques CBA', 'viernes'] = cba_vie
 
-    df_tablero.at['Cheques BA', 'saldo online'] = bsas_k
-    df_tablero.at['Cheques BA', 'pendientes de acreditacion'] = bsas_m
-    df_tablero.at['Cheques BA', 'FCI'] = bsas_n
+    df_tablero.at['Cheques BA', 'saldo online'] = bsas_lun
+    df_tablero.at['Cheques BA', 'martes'] = bsas_mar
+    df_tablero.at['Cheques BA', 'miercoles'] = bsas_mie
+    df_tablero.at['Cheques BA', 'jueves'] = bsas_jue
+    df_tablero.at['Cheques BA', 'viernes'] = bsas_vie
 
     df_tablero['saldo-pagos'] = df_tablero['saldo online'] - df_tablero['proveedores pendientes'] - df_tablero['otros pagos pendientes']
+    
     df_tablero['saldo con pendientes y FCI'] = (
         df_tablero['saldo-pagos'] + 
-        df_tablero['pendientes de acreditacion'] + 
+        df_tablero['martes'] + 
+        df_tablero['miercoles'] +
+        df_tablero['jueves'] +
+        df_tablero['viernes'] +
         df_tablero['FCI']
     )
     df_tablero.loc['TOTAL'] = df_tablero.sum()
     df_tablero = df_tablero.rename(columns={'saldo online': 'saldo contable'})
 
-    # Formatear la fecha del Cruce antes de exportar
     if COLUMNA_FECHA_PROVEEDORES in df_p.columns:
         df_p[COLUMNA_FECHA_PROVEEDORES] = pd.to_datetime(df_p[COLUMNA_FECHA_PROVEEDORES], errors='coerce').dt.strftime('%Y-%m-%d')
 
@@ -330,24 +393,42 @@ def calcular_datos_tablero(hoy_base):
     if 'TOTAL' in df_tablero_bancos.index:
         df_tablero_bancos = df_tablero_bancos.drop(index='TOTAL')
         
+    df_tablero_bancos = df_tablero_bancos[['saldo contable', 'proveedores pendientes', 'otros pagos pendientes', 'saldo-pagos', 'FCI', 'saldo con pendientes y FCI']]
     df_tablero_bancos.loc['TOTAL'] = df_tablero_bancos.sum()
+    
     df_tablero_cheques = df_tablero.loc[df_tablero.index.isin(filas_valores)].copy()
     df_tablero_cheques.loc['TOTAL CHEQUES'] = df_tablero_cheques.sum() 
     
     df_tablero_cheques.columns = [
         'proveedores pendientes', 
         'otros pagos pendientes', 
-        'miércoles', 
-        'saldo-pagos', 
-        'viernes', 
         'lunes', 
+        'saldo-pagos', 
+        'martes', 
+        'miércoles', 
+        'jueves', 
+        'viernes', 
+        'FCI', 
         'saldo con pendientes y FCI'
     ]
 
-    return df_p, df_tablero_bancos, df_tablero_cheques, df_otros_pagos
+    df_tablero_cheques = df_tablero_cheques[[
+        'proveedores pendientes', 
+        'otros pagos pendientes', 
+        'saldo-pagos', 
+        'lunes', 
+        'martes', 
+        'miércoles', 
+        'jueves', 
+        'viernes', 
+        'FCI', 
+        'saldo con pendientes y FCI'
+    ]]
+
+    return df_p, df_tablero_bancos, df_tablero_cheques, df_expansion_echeqs, df_otros_pagos
 
 
-def escribir_hoja_tablero(writer, nombre_hoja, df_p, df_tablero_bancos, df_tablero_cheques, df_otros_pagos):
+def escribir_hoja_tablero(writer, nombre_hoja, df_p, df_tablero_bancos, df_tablero_cheques, df_expansion_echeqs, df_otros_pagos):
     df_p.to_excel(writer, sheet_name=nombre_hoja, index=False, startcol=0)
     
     col_inicio_tablero = len(df_p.columns) + 1
@@ -356,7 +437,12 @@ def escribir_hoja_tablero(writer, nombre_hoja, df_p, df_tablero_bancos, df_table
     fila_inicio_cheques = len(df_tablero_bancos) + 3
     df_tablero_cheques.to_excel(writer, sheet_name=nombre_hoja, startcol=col_inicio_tablero, startrow=fila_inicio_cheques)
 
-    fila_inicio_impuestos = fila_inicio_cheques + len(df_tablero_cheques) + 3
+    # 👇 NUEVO: Ubicación estratégica de la tabla de expansión de echeqs
+    fila_inicio_expansion = fila_inicio_cheques + len(df_tablero_cheques) + 3
+    df_expansion_echeqs.to_excel(writer, sheet_name=nombre_hoja, startcol=col_inicio_tablero, startrow=fila_inicio_expansion, index=False)
+
+    # 👇 REAJUSTADO: El bloque de impuestos ahora inicia dinámicamente debajo de la expansión de echeqs
+    fila_inicio_impuestos = fila_inicio_expansion + len(df_expansion_echeqs) + 3
     df_otros_pagos.to_excel(writer, sheet_name=nombre_hoja, startcol=col_inicio_tablero, startrow=fila_inicio_impuestos, index=False)
 
     workbook  = writer.book
@@ -371,13 +457,14 @@ def escribir_hoja_tablero(writer, nombre_hoja, df_p, df_tablero_bancos, df_table
     fmt_moneda = workbook.add_format({'num_format': '#,##0.00', 'border': 1})
     fmt_rojo = workbook.add_format({'bg_color': "#C04A4A", 'font_color': 'white', 'bold': True, 'border': 1})
     fmt_gris_oscuro = workbook.add_format({'bg_color': "#595959", 'font_color': 'white', 'bold': True, 'border': 1})
+    # 👇 NUEVO FORMATO ESTÉTICO (Naranja/Salmón oscuro para diferenciar la tabla de expansión)
+    fmt_naranja_titulo = workbook.add_format({'bg_color': "#E67E22", 'font_color': 'white', 'bold': True, 'border': 1})
 
-    # 👇 1. Encabezados e inyección de estilos para la tabla Cruce de Proveedores
+    # 1. Encabezados e inyección de estilos para la tabla Cruce de Proveedores
     for col_num, value in enumerate(df_p.columns.values):
         worksheet.write(0, col_num, value, fmt_azul)
         
     for r in range(1, len(df_p) + 1):
-        # Detectamos si es la última fila (la que agregamos de TOTAL GENERAL)
         es_total_cruce = (str(df_p.iloc[r-1].get('Proveedor', '')) == 'TOTAL GENERAL' or 
                           str(df_p.iloc[r-1].iloc[0]) == 'TOTAL GENERAL')
         
@@ -385,7 +472,6 @@ def escribir_hoja_tablero(writer, nombre_hoja, df_p, df_tablero_bancos, df_table
         
         for c in range(len(df_p.columns)):
             val = df_p.iloc[r-1, c]
-            # Si es celda numérica, escribir como float para que el formato de moneda aplique
             if isinstance(val, (int, float)) and val != '':
                 worksheet.write(r, c, float(val), fmt_fila)
             else:
@@ -400,6 +486,10 @@ def escribir_hoja_tablero(writer, nombre_hoja, df_p, df_tablero_bancos, df_table
     worksheet.write(fila_inicio_cheques, col_inicio_tablero, "Concepto", fmt_rojo)
     for col_num, value in enumerate(df_tablero_cheques.columns.values):
         worksheet.write(fila_inicio_cheques, col_inicio_tablero + col_num + 1, value, fmt_rojo)
+
+    # 👇 NUEVO: Encabezados de la Tabla Expansión de Echeqs
+    for col_num, value in enumerate(df_expansion_echeqs.columns.values):
+        worksheet.write(fila_inicio_expansion, col_inicio_tablero + col_num, value, fmt_naranja_titulo)
 
     # Encabezados Impuestos
     for col_num, value in enumerate(df_otros_pagos.columns.values):
@@ -426,6 +516,23 @@ def escribir_hoja_tablero(writer, nombre_hoja, df_p, df_tablero_bancos, df_table
         for c in range(len(df_tablero_cheques.columns)):
             worksheet.write(fila_excel, col_inicio_tablero + c + 1, df_tablero_cheques.iloc[r-1, c], fmt_fila)
 
+    # 👇 CORREGIDO: Formateo de la Tabla Expansión de Echeqs
+    for r in range(1, len(df_expansion_echeqs) + 1):
+        fila_excel = fila_inicio_expansion + r
+        fmt_fila = fmt_amarillo_pastel if r % 2 == 0 else fmt_blanco
+        
+        concepto_exp = str(df_expansion_echeqs.iloc[r-1, 0])
+        monto_exp = df_expansion_echeqs.iloc[r-1, 1]
+        
+        if concepto_exp == 'TOTAL EXPANSION':
+            fmt_fila = fmt_gris_total
+            
+        worksheet.write(fila_excel, col_inicio_tablero, concepto_exp, fmt_fila)
+        try:
+            worksheet.write(fila_excel, col_inicio_tablero + 1, float(monto_exp), fmt_fila)
+        except (ValueError, TypeError):
+            worksheet.write(fila_excel, col_inicio_tablero + 1, str(monto_exp), fmt_fila)
+
     # 4. Formateo de Tabla de Impuestos
     for r in range(1, len(df_otros_pagos) + 1):
         fila_excel = fila_inicio_impuestos + r
@@ -449,14 +556,14 @@ def generar_reporte_excel():
     hoy_actual = pd.Timestamp.now().normalize()
     hoy_entrante = hoy_actual + pd.Timedelta(days=7)
 
-    p_act, ban_act, chq_act, imp_act = calcular_datos_tablero(hoy_actual)
-    p_ent, ban_ent, chq_ent, imp_ent = calcular_datos_tablero(hoy_entrante)
+    p_act, ban_act, chq_act, exp_act, imp_act = calcular_datos_tablero(hoy_actual)
+    p_ent, ban_ent, chq_ent, exp_ent, imp_ent = calcular_datos_tablero(hoy_entrante)
 
     nombre_archivo = f'Reporte_Pagos_{datetime.now().strftime("%Y%m%d")}.xlsx'
 
     with pd.ExcelWriter(nombre_archivo, engine='xlsxwriter') as writer:
-        escribir_hoja_tablero(writer, 'Semana en curso', p_act, ban_act, chq_act, imp_act)
-        escribir_hoja_tablero(writer, 'Semana entrante', p_ent, ban_ent, chq_ent, imp_ent)
+        escribir_hoja_tablero(writer, 'Semana en curso', p_act, ban_act, chq_act, exp_act, imp_act)
+        escribir_hoja_tablero(writer, 'Semana entrante', p_ent, ban_ent, chq_ent, exp_ent, imp_ent)
 
     return nombre_archivo
 
@@ -470,7 +577,7 @@ def enviar_mail(path_adjunto: str, estados: Dict[str, str]):
     msg["Subject"] = "Reporte Pago a Proveedores - FAVICUR"
 
     hay_desactualizados = any("✅" not in v for v in estados.values())
-    alerta = "⚠️ ATENCIÓN: El reporte contiene datos de archivos desactualizados.\n\n" if hay_desactualizados else ""
+    alerta = "⚠️ ATENCIÓN: El reporte contains datos de archivos desactualizados.\n\n" if hay_desactualizados else ""
     
     cuerpo = f"Hola,\n\nAdjuntamos el Reporte de Pago a Proveedores (incluye pestañas de Semana en curso y Semana entrante).\n\n{alerta}Estado de las fuentes utilizadas:\n"
     for archivo, estado in estados.items():
