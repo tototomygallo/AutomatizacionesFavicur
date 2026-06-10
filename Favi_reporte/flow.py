@@ -104,18 +104,14 @@ def normalizar_termino_pago(val):
         return "Sin Especificar"
     
     s = str(val).strip().lower()
-    
-    # 1. Extraemos todos los dígitos numéricos que tenga el string
     numeros = ''.join([c for c in s if c.isdigit()])
     
-    # 2. Si tiene números, evaluamos según la cantidad de días
     if numeros:
         if numeros == "0":
             return "Pago inmediato"
         else:
-            return f"A {numeros} días"
+            return f"A {numeros} days"
             
-    # 3. Si no tiene números, buscamos palabras clave textuales
     if 'inmediato' in s:
         return "Pago inmediato"
         
@@ -128,13 +124,10 @@ def calcular_datos_tablero(hoy_base):
     lunes_semana = hoy_base - pd.Timedelta(days=hoy_base.dayofweek)
     domingo_semana = lunes_semana + pd.Timedelta(days=6)
 
-    # -------------------------------------------------------------------------
     # 1. CARGAR DATOS DE PAGOS Y FILTRAR POR SEMANA
-    # -------------------------------------------------------------------------
     path_maestro = os.path.join(RUTA_DRIVE, ARCHIVO_MAESTRO_PAGOS)
     df_p = pd.read_excel(path_maestro)
 
-    # Mapeo flexible de columnas críticas
     mapeo_columnas = {}
     for col in df_p.columns:
         col_str = str(col)
@@ -151,7 +144,6 @@ def calcular_datos_tablero(hoy_base):
     df_p['Saldo'] = limpiar_monto_apex(df_p['Saldo'])
     df_p['Método de pago'] = df_p['Método de pago'].fillna('#N/D').astype(str).str.strip().str.upper()
 
-    # 👇 CORRECCIÓN MÁSCARA: Agrupamos y convertimos según corresponda
     metodos_convertibles = ['ECHEQ DE TERCEROS', 'CHEQUES CBA', 'CHEQUES BA']
     mask_convertibles = df_p['Método de pago'].isin(metodos_convertibles)
 
@@ -161,57 +153,86 @@ def calcular_datos_tablero(hoy_base):
     df_p.loc[mask_convertibles & df_p['Proveedor'].isin(proveedores_a_transferencia), 'Método de pago'] = 'TRANSFERENCIA'
     df_p.loc[df_p['Método de pago'] == 'TRANSFERENCIA', 'Método de pago'] = 'GALICIA'
     
-    # --- CONSTRUCCIÓN TABLA NUEVA: EXPANSIÓN ECHEQS DE TERCEROS ---
+    # 2. CARGAR Y CLASIFICAR VALORES (Se adelanta para usar df_echeqs en la expansión)
+    path_valores = os.path.join(RUTA_DRIVE, 'Valores Disponibles.xlsx')
+    df_valores_all = pd.read_excel(path_valores)
+    df_valores_all['Caja'] = pd.to_numeric(df_valores_all['Caja'], errors='coerce')
+    df_valores_all['Cod.Tipo'] = pd.to_numeric(df_valores_all['Cod.Tipo'], errors='coerce')
+
+    df_echeqs = df_valores_all[df_valores_all['Cod.Tipo'].isin([60, 61])].copy()
+    df_cba = df_valores_all[(df_valores_all['Cod.Tipo'].isin([20, 33])) & (df_valores_all['Caja'] == 1)].copy()
+    df_bsas = df_valores_all[(df_valores_all['Cod.Tipo'].isin([20, 33])) & (df_valores_all['Caja'] == 5)].copy()
+
     # --- CONSTRUCCIÓN TABLA NUEVA: EXPANSIÓN ECHEQS DE TERCEROS ---
     col_terminos = [
         c for c in df_p.columns 
         if 'PAGO' in str(c).upper() and ('MIN' in str(c).upper() or 'TERM' in str(c).upper())
     ]    
     
-    # 1. 👇 LISTA FIJA CORREGIDA (Con la "A " inicial y soporte para todos los plazos de Odoo)
     modalidades_fijas = [
         "Pago inmediato", 
-        "A 7 días", 
-        "A 15 días", 
-        "A 30 días", 
-        "A 45 días", 
-        "A 60 días", 
-        "A 90 días", 
-        "A 120 días", 
-        "Pago inmediato"
+        "A 7 days", 
+        "A 15 days", 
+        "A 30 days", 
+        "A 45 days", 
+        "A 60 days", 
+        "A 90 days", 
+        "A 120 days"
     ]
+    
+    # Base inicial limpia para el reporte de expansión
+    df_base_exp = pd.DataFrame(index=modalidades_fijas)
+    df_base_exp['Monto Pendiente'] = 0.0
+    df_base_exp['Monto Disponible'] = 0.0
+    df_base_exp.index.name = 'Modalidad Echeqs'
+
+    # Calcular Monto Pendiente (desde Proveedores)
     if col_terminos:
         col_actual_terminos = col_terminos[0]
-        # Filtrar registros que efectivamente quedaron como Echeq de Terceros
         df_solo_echeqs = df_p[df_p['Método de pago'] == 'ECHEQ DE TERCEROS'].copy()
-        print("SOLO ECHEQSSSS",df_solo_echeqs)
-        
         if not df_solo_echeqs.empty:
-            print("GUARDAAA", df_solo_echeqs[col_actual_terminos].apply(normalizar_termino_pago))
             df_solo_echeqs['Termino_Normalizado'] = df_solo_echeqs[col_actual_terminos].apply(normalizar_termino_pago)
-            df_agrupado_echeqs = df_solo_echeqs.groupby('Termino_Normalizado')['Saldo'].sum().reset_index()
-            df_agrupado_echeqs.columns = ['Modalidad Echeqs', 'Monto Pendiente']
-            
-            # Pasamos la columna a índice temporal para reindexar con la lista fija
-            df_agrupado_echeqs = df_agrupado_echeqs.set_index('Modalidad Echeqs')
-        else:
-            # Si no hay echeqs, creamos un DataFrame vacío con la estructura correcta
-            df_agrupado_echeqs = pd.DataFrame(columns=['Monto Pendiente'])
-            df_agrupado_echeqs.index.name = 'Modalidad Echeqs'
-            
-        # 2. Forzamos a que estén todas las modalidades fijas. Si faltan, pone 0.0
-        df_agrupado_echeqs = df_agrupado_echeqs.reindex(modalidades_fijas, fill_value=0.0).reset_index()
+            pendientes_agrupados = df_solo_echeqs.groupby('Termino_Normalizado')['Saldo'].sum()
+            for k, v in pendientes_agrupados.items():
+                if k in df_base_exp.index:
+                    df_base_exp.at[k, 'Monto Pendiente'] = v
+
+    # Calcular Monto Disponible de forma Real (desde df_echeqs)
+    if not df_echeqs.empty:
+        df_echeqs['Fecha Vto.'] = pd.to_datetime(df_echeqs['Fecha Vto.'], errors='coerce')
+        df_echeqs['Importe'] = limpiar_monto_valores(df_echeqs['Importe'])
         
-        # 3. Calculamos el total sobre la estructura completa
-        tot_exp = df_agrupado_echeqs['Monto Pendiente'].sum()
-        fila_tot_exp = pd.DataFrame([{'Modalidad Echeqs': 'TOTAL EXPANSION', 'Monto Pendiente': tot_exp}])
-        df_expansion_echeqs = pd.concat([df_agrupado_echeqs, fila_tot_exp], ignore_index=True)
+        # Clasificar según la distancia en días a hoy_base
+        dias_vto = (df_echeqs['Fecha Vto.'] - hoy_base).dt.days
         
-    else:
-        # En caso extremo de que no exista la columna en el Excel, arma la estructura con ceros
-        df_agrupado_echeqs = pd.DataFrame({'Modalidad Echeqs': modalidades_fijas, 'Monto Pendiente': 0.0})
-        fila_tot_exp = pd.DataFrame([{'Modalidad Echeqs': 'TOTAL EXPANSION', 'Monto Pendiente': 0.0}])
-        df_expansion_echeqs = pd.concat([df_agrupado_echeqs, fila_tot_exp], ignore_index=True)
+        condiciones = [
+            (dias_vto <= 0),
+            (dias_vto > 0) & (dias_vto <= 7),
+            (dias_vto > 7) & (dias_vto <= 15),
+            (dias_vto > 15) & (dias_vto <= 30),
+            (dias_vto > 30) & (dias_vto <= 45),
+            (dias_vto > 45) & (dias_vto <= 60),
+            (dias_vto > 60) & (dias_vto <= 90),
+            (dias_vto > 90)
+        ]
+        
+        df_echeqs['Modalidad_Calculada'] = np.select(condiciones, modalidades_fijas, default="Sin Especificar")
+        disponibles_agrupados = df_echeqs.groupby('Modalidad_Calculada')['Importe'].sum()
+        for k, v in disponibles_agrupados.items():
+            if k in df_base_exp.index:
+                df_base_exp.at[k, 'Monto Disponible'] = v
+
+    # Estructura final con totales de expansión
+    df_agrupado_echeqs = df_base_exp.reset_index()
+    tot_pendiente = df_agrupado_echeqs['Monto Pendiente'].sum()
+    tot_disponible = df_agrupado_echeqs['Monto Disponible'].sum()
+    
+    fila_tot_exp = pd.DataFrame([{
+        'Modalidad Echeqs': 'TOTAL EXPANSION', 
+        'Monto Pendiente': tot_pendiente,
+        'Monto Disponible': tot_disponible
+    }])
+    df_expansion_echeqs = pd.concat([df_agrupado_echeqs, fila_tot_exp], ignore_index=True)
 
     mapeo_metodos_tablero = {
         'MERCADO PAGO': 'Mercado Pago', 'MERCADOPAGO': 'Mercado Pago', 'BANCOR': 'Bancor',
@@ -237,16 +258,6 @@ def calcular_datos_tablero(hoy_base):
             fila_total_p['Saldo'] = total_saldo_cruce
             
         df_p = pd.concat([df_p, pd.DataFrame([fila_total_p])], ignore_index=True)
-
-    # 2. CARGAR Y CLASIFICAR VALORES
-    path_valores = os.path.join(RUTA_DRIVE, 'Valores Disponibles.xlsx')
-    df_valores_all = pd.read_excel(path_valores)
-    df_valores_all['Caja'] = pd.to_numeric(df_valores_all['Caja'], errors='coerce')
-    df_valores_all['Cod.Tipo'] = pd.to_numeric(df_valores_all['Cod.Tipo'], errors='coerce')
-
-    df_echeqs = df_valores_all[df_valores_all['Cod.Tipo'].isin([60, 61])].copy()
-    df_cba = df_valores_all[(df_valores_all['Cod.Tipo'].isin([20, 33])) & (df_valores_all['Caja'] == 1)].copy()
-    df_bsas = df_valores_all[(df_valores_all['Cod.Tipo'].isin([20, 33])) & (df_valores_all['Caja'] == 5)].copy()
 
     # --- PROCESAR VALORES IMPOSITIVOS ---
     path_valores_imp = os.path.join(RUTA_DRIVE, 'Vencimientos Impositivos Favicur.xlsx')
@@ -437,11 +448,9 @@ def escribir_hoja_tablero(writer, nombre_hoja, df_p, df_tablero_bancos, df_table
     fila_inicio_cheques = len(df_tablero_bancos) + 3
     df_tablero_cheques.to_excel(writer, sheet_name=nombre_hoja, startcol=col_inicio_tablero, startrow=fila_inicio_cheques)
 
-    # 👇 NUEVO: Ubicación estratégica de la tabla de expansión de echeqs
     fila_inicio_expansion = fila_inicio_cheques + len(df_tablero_cheques) + 3
     df_expansion_echeqs.to_excel(writer, sheet_name=nombre_hoja, startcol=col_inicio_tablero, startrow=fila_inicio_expansion, index=False)
 
-    # 👇 REAJUSTADO: El bloque de impuestos ahora inicia dinámicamente debajo de la expansión de echeqs
     fila_inicio_impuestos = fila_inicio_expansion + len(df_expansion_echeqs) + 3
     df_otros_pagos.to_excel(writer, sheet_name=nombre_hoja, startcol=col_inicio_tablero, startrow=fila_inicio_impuestos, index=False)
 
@@ -457,10 +466,8 @@ def escribir_hoja_tablero(writer, nombre_hoja, df_p, df_tablero_bancos, df_table
     fmt_moneda = workbook.add_format({'num_format': '#,##0.00', 'border': 1})
     fmt_rojo = workbook.add_format({'bg_color': "#C04A4A", 'font_color': 'white', 'bold': True, 'border': 1})
     fmt_gris_oscuro = workbook.add_format({'bg_color': "#595959", 'font_color': 'white', 'bold': True, 'border': 1})
-    # 👇 NUEVO FORMATO ESTÉTICO (Naranja/Salmón oscuro para diferenciar la tabla de expansión)
     fmt_naranja_titulo = workbook.add_format({'bg_color': "#E67E22", 'font_color': 'white', 'bold': True, 'border': 1})
 
-    # 1. Encabezados e inyección de estilos para la tabla Cruce de Proveedores
     for col_num, value in enumerate(df_p.columns.values):
         worksheet.write(0, col_num, value, fmt_azul)
         
@@ -477,25 +484,20 @@ def escribir_hoja_tablero(writer, nombre_hoja, df_p, df_tablero_bancos, df_table
             else:
                 worksheet.write(r, c, str(val), fmt_fila)
 
-    # Encabezados Tablero Bancos
     worksheet.write(0, col_inicio_tablero, "Concepto", fmt_verde)
     for col_num, value in enumerate(df_tablero_bancos.columns.values):
         worksheet.write(0, col_inicio_tablero + col_num + 1, value, fmt_verde)
 
-    # Encabezados Tablero Cheques
     worksheet.write(fila_inicio_cheques, col_inicio_tablero, "Concepto", fmt_rojo)
     for col_num, value in enumerate(df_tablero_cheques.columns.values):
         worksheet.write(fila_inicio_cheques, col_inicio_tablero + col_num + 1, value, fmt_rojo)
 
-    # 👇 NUEVO: Encabezados de la Tabla Expansión de Echeqs
     for col_num, value in enumerate(df_expansion_echeqs.columns.values):
         worksheet.write(fila_inicio_expansion, col_inicio_tablero + col_num, value, fmt_naranja_titulo)
 
-    # Encabezados Impuestos
     for col_num, value in enumerate(df_otros_pagos.columns.values):
         worksheet.write(fila_inicio_impuestos, col_inicio_tablero + col_num, value, fmt_gris_oscuro)
 
-    # 2. Formateo de Tabla de Bancos
     for r in range(1, len(df_tablero_bancos) + 1):
         fmt_fila = fmt_amarillo_pastel if r % 2 == 0 else fmt_blanco
         if df_tablero_bancos.index[r-1] == 'TOTAL': 
@@ -505,7 +507,6 @@ def escribir_hoja_tablero(writer, nombre_hoja, df_p, df_tablero_bancos, df_table
         for c in range(len(df_tablero_bancos.columns)):
             worksheet.write(r, col_inicio_tablero + c + 1, df_tablero_bancos.iloc[r-1, c], fmt_fila)
 
-    # 3. Formateo de Tabla de Cheques
     for r in range(1, len(df_tablero_cheques) + 1):
         fila_excel = fila_inicio_cheques + r
         fmt_fila = fmt_amarillo_pastel if r % 2 == 0 else fmt_blanco
@@ -516,24 +517,23 @@ def escribir_hoja_tablero(writer, nombre_hoja, df_p, df_tablero_bancos, df_table
         for c in range(len(df_tablero_cheques.columns)):
             worksheet.write(fila_excel, col_inicio_tablero + c + 1, df_tablero_cheques.iloc[r-1, c], fmt_fila)
 
-    # 👇 CORREGIDO: Formateo de la Tabla Expansión de Echeqs
     for r in range(1, len(df_expansion_echeqs) + 1):
         fila_excel = fila_inicio_expansion + r
         fmt_fila = fmt_amarillo_pastel if r % 2 == 0 else fmt_blanco
         
         concepto_exp = str(df_expansion_echeqs.iloc[r-1, 0])
-        monto_exp = df_expansion_echeqs.iloc[r-1, 1]
-        
         if concepto_exp == 'TOTAL EXPANSION':
             fmt_fila = fmt_gris_total
             
         worksheet.write(fila_excel, col_inicio_tablero, concepto_exp, fmt_fila)
-        try:
-            worksheet.write(fila_excel, col_inicio_tablero + 1, float(monto_exp), fmt_fila)
-        except (ValueError, TypeError):
-            worksheet.write(fila_excel, col_inicio_tablero + 1, str(monto_exp), fmt_fila)
+        
+        for c in range(1, len(df_expansion_echeqs.columns)):
+            monto_val = df_expansion_echeqs.iloc[r-1, c]
+            try:
+                worksheet.write(fila_excel, col_inicio_tablero + c, float(monto_val), fmt_fila)
+            except (ValueError, TypeError):
+                worksheet.write(fila_excel, col_inicio_tablero + c, str(monto_val), fmt_fila)
 
-    # 4. Formateo de Tabla de Impuestos
     for r in range(1, len(df_otros_pagos) + 1):
         fila_excel = fila_inicio_impuestos + r
         fmt_fila = fmt_amarillo_pastel if r % 2 == 0 else fmt_blanco
@@ -577,7 +577,7 @@ def enviar_mail(path_adjunto: str, estados: Dict[str, str]):
     msg["Subject"] = "Reporte Pago a Proveedores - FAVICUR"
 
     hay_desactualizados = any("✅" not in v for v in estados.values())
-    alerta = "⚠️ ATENCIÓN: El reporte contains datos de archivos desactualizados.\n\n" if hay_desactualizados else ""
+    alerta = "⚠️ ATENCIÓN: El reporte contiene datos de archivos desactualizados.\n\n" if hay_desactualizados else ""
     
     cuerpo = f"Hola,\n\nAdjuntamos el Reporte de Pago a Proveedores (incluye pestañas de Semana en curso y Semana entrante).\n\n{alerta}Estado de las fuentes utilizadas:\n"
     for archivo, estado in estados.items():
