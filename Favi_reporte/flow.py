@@ -550,8 +550,10 @@ def escribir_hoja_tablero(writer, nombre_hoja, df_p, df_tablero_bancos, df_table
     worksheet.conditional_format('A1:XFD1048576', {'type': 'cell', 'criteria': '<', 'value': 0, 'format': fmt_negativo})
     worksheet.set_column(0, 50, 18, fmt_moneda)
 
-
-@task
+@task(
+    retries=3,              # Si falla, va a reintentar hasta 3 veces
+    retry_delay_seconds=30  # Va a esperar 30 segundos entre reintentos para dar tiempo a que se libere el archivo
+)
 def generar_reporte_excel():
     hoy_actual = pd.Timestamp.now().normalize()
     hoy_entrante = hoy_actual + pd.Timedelta(days=7)
