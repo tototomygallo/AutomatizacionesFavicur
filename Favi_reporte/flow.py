@@ -123,10 +123,10 @@ def calcular_datos_tablero(hoy_base):
     
     lunes_semana = hoy_base - pd.Timedelta(days=hoy_base.dayofweek)
     domingo_semana = lunes_semana + pd.Timedelta(days=6)
-
     # 1. CARGAR DATOS DE PAGOS Y FILTRAR POR SEMANA
     path_maestro = os.path.join(RUTA_DRIVE, ARCHIVO_MAESTRO_PAGOS)
     df_p = pd.read_excel(path_maestro)
+    print("DATFRAMEEEEEE", df_p)
 
     mapeo_columnas = {}
     for col in df_p.columns:
@@ -142,6 +142,11 @@ def calcular_datos_tablero(hoy_base):
     logger.info(f"Para el rango {lunes_semana.strftime('%d/%m')} al {domingo_semana.strftime('%d/%m')}, se encontraron {len(df_p)} registros de proveedores.")
 
     df_p['Saldo'] = limpiar_monto_apex(df_p['Saldo'])
+
+    # 👇 NUEVO: Convertir Código de Proveedor a Entero (Evita el .0)
+    if 'Cod.prov' in df_p.columns:
+        df_p['Cod.prov'] = pd.to_numeric(df_p['Cod.prov'], errors='coerce').astype('Int64')
+
     df_p['Método de pago'] = df_p['Método de pago'].fillna('#N/D').astype(str).str.strip().str.upper()
 
     metodos_convertibles = ['ECHEQ DE TERCEROS', 'CHEQUES CBA', 'CHEQUES BA']
@@ -221,16 +226,20 @@ def calcular_datos_tablero(hoy_base):
         for k, v in disponibles_agrupados.items():
             if k in df_base_exp.index:
                 df_base_exp.at[k, 'Monto Disponible'] = v
-
+    # ----------------------------------------------------------------------
+    # NUEVO: Cálculo de la columna Saldo (Disponible - Pendiente)
+    df_base_exp['Saldo'] = df_base_exp['Monto Disponible'] - df_base_exp['Monto Pendiente']
+    # ----------------------------------------------------------------------
     # Estructura final con totales de expansión
     df_agrupado_echeqs = df_base_exp.reset_index()
     tot_pendiente = df_agrupado_echeqs['Monto Pendiente'].sum()
     tot_disponible = df_agrupado_echeqs['Monto Disponible'].sum()
-    
+    tot_saldo = tot_disponible - tot_pendiente # Mantenemos la lógica de la resta en el total
     fila_tot_exp = pd.DataFrame([{
         'Modalidad Echeqs': 'TOTAL EXPANSION', 
         'Monto Pendiente': tot_pendiente,
-        'Monto Disponible': tot_disponible
+        'Monto Disponible': tot_disponible,
+        'Saldo': tot_saldo
     }])
     df_expansion_echeqs = pd.concat([df_agrupado_echeqs, fila_tot_exp], ignore_index=True)
 
@@ -397,6 +406,15 @@ def calcular_datos_tablero(hoy_base):
     if COLUMNA_FECHA_PROVEEDORES in df_p.columns:
         df_p[COLUMNA_FECHA_PROVEEDORES] = pd.to_datetime(df_p[COLUMNA_FECHA_PROVEEDORES], errors='coerce').dt.strftime('%Y-%m-%d')
 
+
+    #if 'Cod.prov' in df_p.columns:
+    if 'Cod.prov' in df_p.columns:
+        df_p['Cod.prov'] = df_p['Cod.prov'].apply(
+            lambda x: ''
+            if pd.isna(x) or str(x).strip() == ''
+            else int(float(x))
+        )
+
     df_p = df_p.fillna('')
     
     filas_valores = ['Echeq de terceros', 'Cheques CBA', 'Cheques BA']
@@ -410,32 +428,30 @@ def calcular_datos_tablero(hoy_base):
     df_tablero_cheques = df_tablero.loc[df_tablero.index.isin(filas_valores)].copy()
     df_tablero_cheques.loc['TOTAL CHEQUES'] = df_tablero_cheques.sum() 
     
+    # 1. Filtramos y nos quedamos SOLO con las columnas que queremos (usando sus nombres actuales)
+    # Reemplazamos 'saldo online' por el lugar de 'lunes'
+    df_tablero_cheques = df_tablero_cheques[[
+        'proveedores pendientes', 
+        'otros pagos pendientes', 
+        'saldo contable',   # <--- Este es el valor del Lunes acumulado anterior
+        'martes', 
+        'miercoles', 
+        'jueves', 
+        'viernes', 
+        'saldo con pendientes y FCI'
+    ]]
+
+    # 2. Ahora que el DataFrame tiene exactamente 8 columnas, le asignamos los nombres estéticos para el Excel
     df_tablero_cheques.columns = [
         'proveedores pendientes', 
         'otros pagos pendientes', 
         'lunes', 
-        'saldo-pagos', 
         'martes', 
         'miércoles', 
         'jueves', 
         'viernes', 
-        'FCI', 
-        'saldo con pendientes y FCI'
+        'saldo con pendientes'
     ]
-
-    df_tablero_cheques = df_tablero_cheques[[
-        'proveedores pendientes', 
-        'otros pagos pendientes', 
-        'saldo-pagos', 
-        'lunes', 
-        'martes', 
-        'miércoles', 
-        'jueves', 
-        'viernes', 
-        'FCI', 
-        'saldo con pendientes y FCI'
-    ]]
-
     return df_p, df_tablero_bancos, df_tablero_cheques, df_expansion_echeqs, df_otros_pagos
 
 
