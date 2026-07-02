@@ -118,7 +118,7 @@ def normalizar_termino_pago(val):
     return val.strip().capitalize()
 
 
-def calcular_datos_tablero(hoy_base):
+def calcular_datos_tablero(hoy_base, incluir_vencidos=False):
     logger = LOGGER_GLOBAL.obtener_logger_prefect()
     
     lunes_semana = hoy_base - pd.Timedelta(days=hoy_base.dayofweek)
@@ -136,8 +136,22 @@ def calcular_datos_tablero(hoy_base):
     if mapeo_columnas:
         df_p = df_p.rename(columns=mapeo_columnas)
 
-    df_p[COLUMNA_FECHA_PROVEEDORES] = pd.to_datetime(df_p[COLUMNA_FECHA_PROVEEDORES], errors='coerce')
-    df_p = df_p[(df_p[COLUMNA_FECHA_PROVEEDORES] >= lunes_semana) & (df_p[COLUMNA_FECHA_PROVEEDORES] <= domingo_semana)].copy()
+    df_p[COLUMNA_FECHA_PROVEEDORES] = pd.to_datetime(
+        df_p[COLUMNA_FECHA_PROVEEDORES],
+        errors='coerce'
+    )
+
+    if incluir_vencidos:
+        # Todo lo vencido hasta el domingo de esta semana
+        df_p = df_p[
+            df_p[COLUMNA_FECHA_PROVEEDORES] <= domingo_semana
+        ].copy()
+    else:
+        # Solo los vencimientos de la semana
+        df_p = df_p[
+            (df_p[COLUMNA_FECHA_PROVEEDORES] >= lunes_semana) &
+            (df_p[COLUMNA_FECHA_PROVEEDORES] <= domingo_semana)
+        ].copy()
     
     logger.info(f"Para el rango {lunes_semana.strftime('%d/%m')} al {domingo_semana.strftime('%d/%m')}, se encontraron {len(df_p)} registros de proveedores.")
 
@@ -574,8 +588,8 @@ def generar_reporte_excel():
     hoy_actual = pd.Timestamp.now().normalize()
     hoy_entrante = hoy_actual + pd.Timedelta(days=7)
 
-    p_act, ban_act, chq_act, exp_act, imp_act = calcular_datos_tablero(hoy_actual)
-    p_ent, ban_ent, chq_ent, exp_ent, imp_ent = calcular_datos_tablero(hoy_entrante)
+    p_act, ban_act, chq_act, exp_act, imp_act = calcular_datos_tablero(hoy_actual, incluir_vencidos=True)
+    p_ent, ban_ent, chq_ent, exp_ent, imp_ent = calcular_datos_tablero(hoy_entrante, incluir_vencidos=False)
 
     nombre_archivo = f'Reporte_Pagos_{datetime.now().strftime("%Y%m%d")}.xlsx'
 
